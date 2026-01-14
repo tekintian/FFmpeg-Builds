@@ -1,0 +1,154 @@
+name: Build FFmpeg (Native)
+
+on:
+  push:
+    branches: [ci]
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: 'Select platforms to build'
+        type: choice
+        options:
+          - all
+          - linux64
+          - win64
+          - macos64
+          - macosarm64
+        default: all
+        required: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux64
+            cc: gcc
+            cxx: g++
+            configure_extra: --enable-gpl --enable-version3
+          - os: windows-latest
+            target: win64
+            cc: cl
+            cxx: cl
+            configure_extra: --toolchain=msvc --enable-gpl --enable-version3
+          - os: macos-15
+            target: macosarm64
+            arch: arm64
+            cc: clang
+            cxx: clang++
+            configure_extra: --enable-gpl --enable-version3
+          - os: macos-15-large
+            target: macos64
+            arch: x86_64
+            cc: clang
+            cxx: clang++
+            configure_extra: --enable-gpl --enable-version3
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Skip if platform not selected
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.platforms != 'all' && !contains(github.event.inputs.platforms, matrix.target) }}
+        run: echo "Skipping ${{ matrix.target }}"
+
+      - name: Checkout
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target) }}
+        uses: actions/checkout@v4
+
+      - name: Install dependencies (Linux)
+        if: ${{ runner.os == 'Linux' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target)) }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            nasm \
+            yasm \
+            pkg-config \
+            libvpx-dev \
+            libmp3lame-dev \
+            libopus-dev \
+            libtheora-dev \
+            libvorbis-dev \
+            libx264-dev \
+            libx265-dev \
+            libfdk-aac-dev \
+            libass-dev \
+            libfreetype6-dev \
+            libfontconfig1-dev
+
+      - name: Install dependencies (macOS)
+        if: ${{ runner.os == 'macOS' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target)) }}
+        run: |
+          arch -${{ matrix.arch }} brew install nasm yasm pkg-config x264 x265 fdk-aac libass libvpx opus theora libvorbis lame
+
+      - name: Setup MSVC (Windows)
+        if: ${{ runner.os == 'Windows' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target)) }}
+        uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
+
+      - name: Install NASM (Windows)
+        if: ${{ runner.os == 'Windows' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target)) }}
+        run: |
+          choco install nasm
+          echo "C:\\Program Files\\NASM" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Clone FFmpeg
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target) }}
+        run: |
+          git clone --filter=blob:none --branch master https://github.com/FFmpeg/FFmpeg.git
+          cd FFmpeg
+          git checkout release/7.1 || git checkout n7.1
+
+      - name: Configure (Linux/macOS)
+        if: ${{ runner.os != 'Windows' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target)) }}
+        run: |
+          cd FFmpeg
+          arch -${{ matrix.arch }} ./configure \
+            --prefix=$HOME/ffmpeg-install \
+            --pkg-config-flags="--static" \
+            ${{ matrix.configure_extra }} \
+            --extra-cflags="-I$HOME/ffmpeg-install/include" \
+            --extra-ldflags="-L$HOME/ffmpeg-install/lib" \
+            --extra-version=$(date +%Y%m%d)
+
+      - name: Configure (Windows)
+        if: ${{ runner.os == 'Windows' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target)) }}
+        shell: pwsh
+        run: |
+          cd FFmpeg
+          ./configure `
+            --prefix=$HOME/ffmpeg-install `
+            --toolchain=msvc `
+            ${{ matrix.configure_extra }} `
+            --extra-version=(Get-Date -Format "yyyyMMdd")
+
+      - name: Build
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target) }}
+        run: |
+          cd FFmpeg
+          make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4) V=1
+          make install
+        env:
+          ARCH: ${{ matrix.arch }}
+
+      - name: Create archive (Linux/macOS)
+        if: ${{ runner.os != 'Windows' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target)) }}
+        run: |
+          cd $HOME/ffmpeg-install
+          tar czf ffmpeg-${{ matrix.target }}-$(date +%Y%m%d).tar.gz .
+
+      - name: Create archive (Windows)
+        if: ${{ runner.os == 'Windows' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target)) }}
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "$HOME\ffmpeg-install\*" -DestinationPath "ffmpeg-${{ matrix.target }}-$(Get-Date -Format 'yyyyMMdd').zip"
+
+      - name: Upload artifacts
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target) }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-${{ matrix.target }}
+          path: |
+            ffmpeg-${{ matrix.target }}-*.tar.gz
+            ffmpeg-${{ matrix.target }}-*.zip
