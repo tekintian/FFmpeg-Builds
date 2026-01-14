@@ -95,6 +95,13 @@ jobs:
         if: ${{ runner.os == 'macOS' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target)) }}
         run: |
           arch -${{ matrix.arch }} brew install nasm yasm pkg-config libvpx opus libvorbis cmake autoconf automake libtool lame
+          
+          # Set correct pkg-config path for architecture
+          if [[ "${{ matrix.arch }}" == "arm64" ]]; then
+            echo "PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
+          else
+            echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
+          fi
 
       - name: Setup MSVC (Windows)
         if: ${{ runner.os == 'Windows' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target)) }}
@@ -107,7 +114,7 @@ jobs:
         run: |
           choco install nasm -y
           choco install lame -y
-          echo "C:\\Program Files\\NASM" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "C:\Program Files\NASM" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Clone FFmpeg
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target) }}
@@ -137,6 +144,16 @@ jobs:
         if: ${{ runner.os == 'macOS' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target)) }}
         run: |
           cd FFmpeg
+          
+          # Set correct paths for architecture
+          if [[ "${{ matrix.arch }}" == "arm64" ]]; then
+            LAME_INCLUDE="/opt/homebrew/include"
+            LAME_LIB="/opt/homebrew/lib"
+          else
+            LAME_INCLUDE="/usr/local/include"
+            LAME_LIB="/usr/local/lib"
+          fi
+          
           ./configure \
             --prefix=$HOME/ffmpeg-install \
             ${{ github.event.inputs.license_type == 'gpl' && '--enable-gpl' || '--disable-gpl' }} \
@@ -146,6 +163,8 @@ jobs:
             --enable-libopus \
             --enable-libvorbis \
             --enable-libvpx \
+            --extra-cflags="-I${LAME_INCLUDE}" \
+            --extra-ldflags="-L${LAME_LIB}" \
             --extra-version=$(date +%Y%m%d)
 
       - name: Configure (Windows)
@@ -157,56 +176,42 @@ jobs:
           
           $gplArgs = if("${{ github.event.inputs.license_type }}" -eq "gpl") { "--enable-gpl", "--enable-libx264", "--enable-libx265" } else { "--disable-gpl" }
           
-          Write-Host "Running configure with args: $gplArgs"
-          
-          # Check for various possible lame paths
-          $possibleLamePaths = @(
-            "C:\Program Files\lame",
-            "C:\Program Files (x86)\lame",
-            "C:\Program Files\Lame For Audacity",
-            "C:\Program Files (x86)\Lame For Audacity"
+          # Build basic configure command
+          $configCmd = @(
+            "./configure",
+            "--prefix=$HOME/ffmpeg-install",
+            "--toolchain=msvc",
+            "--enable-version3",
+            "--enable-libmp3lame",
+            "--enable-libopus",
+            "--enable-libvorbis",
+            "--enable-libvpx",
+            "--extra-version=$(Get-Date -Format "yyyyMMdd")",
+            $gplArgs
           )
           
-          $lamePath = ""
-          foreach ($path in $possibleLamePaths) {
-            if (Test-Path "$path\include\lame\lame.h") {
-              $lamePath = $path
-              break
+          Write-Host "Configure command: $($configCmd -join ' ')"
+          
+          # Execute configure with error checking
+          try {
+            & $configCmd 2>&1 | Tee-Object -FilePath configure_output.txt
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "Configure failed with exit code $LASTEXITCODE"
+              exit 1
             }
+          } catch {
+            Write-Host "Configure threw an exception: $_"
+            exit 1
           }
-          
-          if (-not $lamePath) {
-            Write-Host "Warning: Could not find lame include files, trying default path"
-            $lamePath = "C:\Program Files\lame"
-          }
-          
-          Write-Host "Using lame path: $lamePath"
-          
-          # Build configure command with proper paths
-          $configCmd = "./configure "
-          $configCmd += "--prefix=$HOME/ffmpeg-install "
-          $configCmd += "--toolchain=msvc "
-          $configCmd += ($gplArgs -join " ") + " "
-          $configCmd += "--enable-version3 "
-          $configCmd += "--enable-libmp3lame "
-          $configCmd += "--enable-libopus "
-          $configCmd += "--enable-libvorbis "
-          $configCmd += "--enable-libvpx "
-          $configCmd += "--extra-cflags=-I${lamePath}\include "
-          $configCmd += "--extra-ldflags=-LIBPATH:${lamePath}\lib "
-          $configCmd += "--extra-version=$(Get-Date -Format "yyyyMMdd")"
-          
-          Write-Host "Full configure command: $configCmd"
-          
-          # Execute configure
-          Invoke-Expression -Command $configCmd
 
           Write-Host "Configure completed. Checking for config.mak:"
           if (Test-Path "ffbuild/config.mak") {
             Write-Host "✓ ffbuild/config.mak created successfully"
           } else {
             Write-Host "✗ ffbuild/config.mak NOT found"
-            Get-ChildItem -Recurse | Where-Object { $_.Name -eq "config.mak" }
+            Write-Host "Contents of ffbuild directory:"
+            Get-ChildItem -Path ffbuild -Force
+            exit 1
           }
 
       - name: Build (Linux/macOS)
@@ -226,9 +231,9 @@ jobs:
           
           # Get number of processors for parallel build
           $cores = $env:NUMBER_OF_PROCESSORS
-          if (-not $cores -or $cores -eq 0) { 
+          if (-not $cores -or $cores -eq 0) {
             Write-Host "Could not determine number of cores from environment, using default"
-            $cores = 4 
+            $cores = 4
           }
           
           Write-Host "Building with $cores cores"
@@ -239,21 +244,39 @@ jobs:
             exit 1
           }
           
-          # Run make
-          & make -j$cores V=1
-          & make install
+          # Run make with error checking
+          try {
+            & make -j$cores V=1
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "Make failed with exit code $LASTEXITCODE"
+              exit 1
+            }
+            
+            & make install
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "Make install failed with exit code $LASTEXITCODE"
+              exit 1
+            }
+          } catch {
+            Write-Host "Make threw an exception: $_"
+            exit 1
+          }
 
       - name: Create archive (Linux/macOS)
         if: ${{ runner.os != 'Windows' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target)) }}
         run: |
-          cd $HOME/ffmpeg-install
-          tar czf ffmpeg-${{ matrix.target }}-$(date +%Y%m%d).tar.gz .
+          # Create archive outside the source directory to avoid self-inclusion
+          cd $HOME
+          archive_name="ffmpeg-${{ matrix.target }}-$(date +%Y%m%d).tar.gz"
+          tar czf "$archive_name" --warning=no-file-changed -C "ffmpeg-install" .
 
       - name: Create archive (Windows)
         if: ${{ runner.os == 'Windows' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target)) }}
         shell: pwsh
         run: |
-          Compress-Archive -Path "$HOME\ffmpeg-install\*" -DestinationPath "ffmpeg-${{ matrix.target }}-$(Get-Date -Format 'yyyyMMdd').zip"
+          cd $HOME
+          $archive_name = "ffmpeg-${{ matrix.target }}-$(Get-Date -Format 'yyyyMMdd').zip"
+          Compress-Archive -Path "ffmpeg-install/*" -DestinationPath "$archive_name" -Force
 
       - name: Upload artifacts
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target) }}
@@ -261,5 +284,4 @@ jobs:
         with:
           name: ffmpeg-${{ matrix.target }}-${{ github.event.inputs.license_type || 'lgpl' }}
           path: |
-            ffmpeg-${{ matrix.target }}-*.tar.gz
-            ffmpeg-${{ matrix.target }}-*.zip
+            ${{ runner.os != 'Windows' && format('{0}/ffmpeg-{1}-*.tar.gz', env.HOME, matrix.target) || format('{0}\ffmpeg-{1}-*.zip', env.HOME, matrix.target) }}
