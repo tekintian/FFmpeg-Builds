@@ -1,11 +1,13 @@
 # FFmpeg Static Auto-Builds
 
-Static Windows (x86_64) and Linux (x86_64) Builds of ffmpeg master and latest release branch.
+Static Windows (x86_64), Linux (x86_64) and macOS (x86_64/arm64) Builds of ffmpeg master and latest release branch.
 
 Windows builds are targetting Windows 7 and newer, provided UCRT is installed.
 The minimum supported version is Windows 10 22H2, no guarantees on anything older.
 
 Linux builds are targetting RHEL/CentOS 8 (glibc-2.28 + linux-4.18) and anything more recent.
+
+macOS builds are targetting macOS 10.13+ (x86_64) and macOS 11+ (arm64/Apple Silicon).
 
 ## Auto-Builds
 
@@ -48,11 +50,17 @@ Available targets:
 * `win32` (x86 Windows)
 * `linux64` (x86_64 Linux, glibc>=2.28, linux>=4.18)
 * `linuxarm64` (arm64 (aarch64) Linux, glibc>=2.28, linux>=4.18)
+* `macos64` (x86_64 macOS, macOS>=10.13)
+* `macosarm64` (arm64 macOS, macOS>=11)
 
 The linuxarm64 target will not build some dependencies due to lack of arm64 (aarch64) architecture support or cross-compiling restrictions.
 
 * `davs2` and `xavs2`: aarch64 support is broken.
 * `libmfx` and `libva`: Library for Intel QSV, so there is no aarch64 support.
+
+The macosarm64 target will not build some dependencies due to lack of arm64 support or Apple Silicon-specific restrictions.
+
+* `libmfx` and `libva`: Intel-specific libraries, not available on Apple Silicon.
 
 Available variants:
 * `gpl` Includes all dependencies, even those that require full GPL instead of just LGPL.
