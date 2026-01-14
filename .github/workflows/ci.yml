@@ -73,14 +73,28 @@ jobs:
             yasm \
             pkg-config \
             libvpx-dev \
-            libmp3lame-dev \
             libopus-dev \
-            libvorbis-dev
+            libvorbis-dev \
+            autoconf \
+            automake \
+            libtool \
+            cmake
+
+      - name: Build libmp3lame (Linux)
+        if: ${{ runner.os == 'Linux' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target)) }}
+        run: |
+          cd /tmp
+          git clone https://github.com/rbrito/lame.git
+          cd lame
+          ./configure --prefix=$HOME/lame-install
+          make -j$(nproc)
+          make install
+          echo "PKG_CONFIG_PATH=$HOME/lame-install/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
 
       - name: Install dependencies (macOS)
         if: ${{ runner.os == 'macOS' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target)) }}
         run: |
-          arch -${{ matrix.arch }} brew install nasm yasm pkg-config x264 x265 libvpx opus libvorbis lame
+          arch -${{ matrix.arch }} brew install nasm yasm pkg-config libvpx opus libvorbis cmake autoconf automake libtool
 
       - name: Setup MSVC (Windows)
         if: ${{ runner.os == 'Windows' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target)) }}
@@ -135,14 +149,24 @@ jobs:
             --enable-libvpx `
             --extra-version=(Get-Date -Format "yyyyMMdd")
 
-      - name: Build
-        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target) }}
+      - name: Build (Linux/macOS)
+        if: ${{ runner.os != 'Windows' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target)) }}
         run: |
           cd FFmpeg
-          make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4) V=1
+          make -j$(nproc || sysctl -n hw.ncpu || echo 4) V=1
           make install
         env:
           ARCH: ${{ matrix.arch }}
+
+      - name: Build (Windows)
+        if: ${{ runner.os == 'Windows' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target)) }}
+        shell: pwsh
+        run: |
+          cd FFmpeg
+          $cores = (Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum
+          if (-not $cores) { $cores = 4 }
+          & make -j$cores V=1
+          & make install
 
       - name: Create archive (Linux/macOS)
         if: ${{ runner.os != 'Windows' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target)) }}
