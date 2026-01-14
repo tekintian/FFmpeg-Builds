@@ -28,24 +28,24 @@ jobs:
             target: linux64
             cc: gcc
             cxx: g++
-            configure_extra: --enable-gpl --enable-version3
+            configure_extra: --enable-version3 --enable-libmp3lame --enable-libopus --enable-libvorbis --enable-libvpx --enable-libx264 --enable-libx265
           - os: windows-latest
             target: win64
             cc: cl
             cxx: cl
-            configure_extra: --toolchain=msvc --enable-gpl --enable-version3
+            configure_extra: --toolchain=msvc --enable-version3 --enable-libmp3lame --enable-libopus --enable-libvorbis --enable-libvpx --enable-libx264 --enable-libx265
           - os: macos-15
             target: macosarm64
             arch: arm64
             cc: clang
             cxx: clang++
-            configure_extra: --enable-gpl --enable-version3
-          - os: macos-15-large
+            configure_extra: --enable-version3 --enable-libmp3lame --enable-libopus --enable-libvorbis --enable-libvpx --enable-libx264 --enable-libx265
+          - os: macos-15-intel
             target: macos64
             arch: x86_64
             cc: clang
             cxx: clang++
-            configure_extra: --enable-gpl --enable-version3
+            configure_extra: --enable-version3 --enable-libmp3lame --enable-libopus --enable-libvorbis --enable-libvpx --enable-libx264 --enable-libx265
     runs-on: ${{ matrix.os }}
     steps:
       - name: Skip if platform not selected
@@ -67,19 +67,14 @@ jobs:
             libvpx-dev \
             libmp3lame-dev \
             libopus-dev \
-            libtheora-dev \
             libvorbis-dev \
             libx264-dev \
-            libx265-dev \
-            libfdk-aac-dev \
-            libass-dev \
-            libfreetype6-dev \
-            libfontconfig1-dev
+            libx265-dev
 
       - name: Install dependencies (macOS)
         if: ${{ runner.os == 'macOS' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target)) }}
         run: |
-          arch -${{ matrix.arch }} brew install nasm yasm pkg-config x264 x265 fdk-aac libass libvpx opus theora libvorbis lame
+          arch -${{ matrix.arch }} brew install nasm yasm pkg-config x264 x265 libvpx opus libvorbis lame
 
       - name: Setup MSVC (Windows)
         if: ${{ runner.os == 'Windows' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target)) }}
@@ -106,8 +101,14 @@ jobs:
           cd FFmpeg
           arch -${{ matrix.arch }} ./configure \
             --prefix=$HOME/ffmpeg-install \
-            --pkg-config-flags="--static" \
-            ${{ matrix.configure_extra }} \
+            --disable-gpl \
+            --enable-version3 \
+            --enable-libmp3lame \
+            --enable-libopus \
+            --enable-libvorbis \
+            --enable-libvpx \
+            --enable-libx264 \
+            --enable-libx265 \
             --extra-cflags="-I$HOME/ffmpeg-install/include" \
             --extra-ldflags="-L$HOME/ffmpeg-install/lib" \
             --extra-version=$(date +%Y%m%d)
@@ -120,7 +121,14 @@ jobs:
           ./configure `
             --prefix=$HOME/ffmpeg-install `
             --toolchain=msvc `
-            ${{ matrix.configure_extra }} `
+            --disable-gpl `
+            --enable-version3 `
+            --enable-libmp3lame `
+            --enable-libopus `
+            --enable-libvorbis `
+            --enable-libvpx `
+            --enable-libx264 `
+            --enable-libx265 `
             --extra-version=(Get-Date -Format "yyyyMMdd")
 
       - name: Build
