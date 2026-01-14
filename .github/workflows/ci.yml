@@ -5,6 +5,14 @@ on:
     branches: [ci]
   workflow_dispatch:
     inputs:
+      license_type:
+        description: 'Select license type'
+        type: choice
+        options:
+          - lgpl
+          - gpl
+        default: lgpl
+        required: false
       platforms:
         description: 'Select platforms to build'
         type: choice
@@ -14,7 +22,7 @@ on:
           - win64
           - macos64
           - macosarm64
-        default: all
+        default: macos64
         required: false
 
 jobs:
@@ -28,24 +36,24 @@ jobs:
             target: linux64
             cc: gcc
             cxx: g++
-            configure_extra: --enable-version3 --enable-libmp3lame --enable-libopus --enable-libvorbis --enable-libvpx --enable-libx264 --enable-libx265
+            configure_extra: --enable-version3
           - os: windows-latest
             target: win64
             cc: cl
             cxx: cl
-            configure_extra: --toolchain=msvc --enable-version3 --enable-libmp3lame --enable-libopus --enable-libvorbis --enable-libvpx --enable-libx264 --enable-libx265
+            configure_extra: --toolchain=msvc --enable-version3
           - os: macos-15
             target: macosarm64
             arch: arm64
             cc: clang
             cxx: clang++
-            configure_extra: --enable-version3 --enable-libmp3lame --enable-libopus --enable-libvorbis --enable-libvpx --enable-libx264 --enable-libx265
+            configure_extra: --enable-version3
           - os: macos-15-intel
             target: macos64
             arch: x86_64
             cc: clang
             cxx: clang++
-            configure_extra: --enable-version3 --enable-libmp3lame --enable-libopus --enable-libvorbis --enable-libvpx --enable-libx264 --enable-libx265
+            configure_extra: --enable-version3
     runs-on: ${{ matrix.os }}
     steps:
       - name: Skip if platform not selected
@@ -67,9 +75,7 @@ jobs:
             libvpx-dev \
             libmp3lame-dev \
             libopus-dev \
-            libvorbis-dev \
-            libx264-dev \
-            libx265-dev
+            libvorbis-dev
 
       - name: Install dependencies (macOS)
         if: ${{ runner.os == 'macOS' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target)) }}
@@ -99,16 +105,15 @@ jobs:
         if: ${{ runner.os != 'Windows' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target)) }}
         run: |
           cd FFmpeg
-          arch -${{ matrix.arch }} ./configure \
+          ./configure \
             --prefix=$HOME/ffmpeg-install \
-            --disable-gpl \
+            ${{ github.event.inputs.license_type == 'gpl' && '--enable-gpl' || '--disable-gpl' }} \
             --enable-version3 \
+            ${{ github.event.inputs.license_type == 'gpl' && '--enable-libx264 --enable-libx265' || '' }} \
             --enable-libmp3lame \
             --enable-libopus \
             --enable-libvorbis \
             --enable-libvpx \
-            --enable-libx264 \
-            --enable-libx265 \
             --extra-cflags="-I$HOME/ffmpeg-install/include" \
             --extra-ldflags="-L$HOME/ffmpeg-install/lib" \
             --extra-version=$(date +%Y%m%d)
@@ -118,17 +123,16 @@ jobs:
         shell: pwsh
         run: |
           cd FFmpeg
+          $gplArgs = if("${{ github.event.inputs.license_type }}" -eq "gpl") { @("--enable-gpl", "--enable-libx264", "--enable-libx265") } else { @("--disable-gpl") }
           ./configure `
             --prefix=$HOME/ffmpeg-install `
             --toolchain=msvc `
-            --disable-gpl `
+            $gplArgs `
             --enable-version3 `
             --enable-libmp3lame `
             --enable-libopus `
             --enable-libvorbis `
             --enable-libvpx `
-            --enable-libx264 `
-            --enable-libx265 `
             --extra-version=(Get-Date -Format "yyyyMMdd")
 
       - name: Build
@@ -156,7 +160,7 @@ jobs:
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target) }}
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-${{ matrix.target }}
+          name: ffmpeg-${{ matrix.target }}-${{ github.event.inputs.license_type || 'lgpl' }}
           path: |
             ffmpeg-${{ matrix.target }}-*.tar.gz
             ffmpeg-${{ matrix.target }}-*.zip
