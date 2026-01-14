@@ -7,14 +7,6 @@ on:
       - 'LICENSE'
   workflow_dispatch:
     inputs:
-      branch:
-        description: 'Select branch to build'
-        type: choice
-        options:
-          - master
-          - dev
-        default: master
-        required: false
       doRelease:
         description: 'Publish new release'
         type: boolean
@@ -53,12 +45,6 @@ jobs:
     if: ${{ github.event.inputs.buildOnly != 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Set Branch
-        if: ${{ github.event_name == 'workflow_dispatch' }}
-        run: |
-          BRANCH="${{ github.event.inputs.branch || 'master' }}"
-          echo "branch=$BRANCH" >> $GITHUB_ENV
-          echo "Building from branch: $BRANCH"
       - name: Repo Check
         if: ${{ github.event_name == 'schedule' }}
         run: |
@@ -89,8 +75,6 @@ jobs:
         run: df -h && sudo apt-get clean && docker system prune -a -f && sudo rm -rf /opt/ghc /usr/local/.ghcup /usr/local/lib/android && df -h
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.branch || github.ref_name }}
       - name: Install buildx
         uses: docker/setup-buildx-action@v3
         with:
@@ -120,6 +104,13 @@ jobs:
           tags: ${{ steps.imagename.outputs.name }}:latest${{ (contains(matrix.runner, 'arm') && '-arm') || '' }}
           cache-to: type=registry,mode=max,ref=${{ steps.imagename.outputs.name }}:cache${{ (contains(matrix.runner, 'arm') && '-arm') || '' }}
           cache-from: type=registry,ref=${{ steps.imagename.outputs.name }}:cache${{ (contains(matrix.runner, 'arm') && '-arm') || '' }}
+          outputs: type=docker,dest=/tmp/${{ steps.imagename.outputs.rawname }}${{ (contains(matrix.runner, 'arm') && '-arm') || '' }}.tar
+      - name: Upload docker image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.imagename.outputs.rawname }}${{ (contains(matrix.runner, 'arm') && '-arm') || '' }}-docker-image
+          path: /tmp/${{ steps.imagename.outputs.rawname }}${{ (contains(matrix.runner, 'arm') && '-arm') || '' }}.tar
+          retention-days: 7
       - name: Get download cache key
         if: ${{ !cancelled() && !contains(matrix.runner, 'arm') }}
         id: dl_cache
@@ -180,13 +171,7 @@ jobs:
           contains(github.event.inputs.platforms, matrix.target)
         run: df -h && sudo apt-get clean && docker system prune -a -f && sudo rm -rf /opt/ghc /usr/local/.ghcup /usr/local/lib/android && df -h
       - name: Checkout
-        if: |
-          github.event_name != 'workflow_dispatch' ||
-          github.event.inputs.platforms == 'all' ||
-          contains(github.event.inputs.platforms, matrix.target)
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.branch || github.ref_name }}
       - name: Install buildx
         if: |
           github.event_name != 'workflow_dispatch' ||
@@ -239,6 +224,17 @@ jobs:
           cache-from: type=registry,ref=${{ steps.imagename.outputs.name }}:cache
           build-args: |
             GH_REPO=ghcr.io/${{ steps.imagename.outputs.gh_repo }}
+          outputs: type=docker,dest=/tmp/${{ steps.imagename.outputs.rawname }}.tar
+      - name: Upload docker image artifact
+        if: |
+          github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.platforms == 'all' ||
+          contains(github.event.inputs.platforms, matrix.target)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.imagename.outputs.rawname }}-docker-image
+          path: /tmp/${{ steps.imagename.outputs.rawname }}.tar
+          retention-days: 7
       - name: Cleanup
         continue-on-error: true
         if: |
@@ -292,13 +288,7 @@ jobs:
           contains(github.event.inputs.platforms, matrix.target)
         run: df -h && sudo apt-get clean && docker system prune -a -f && sudo rm -rf /opt/ghc /usr/local/.ghcup /usr/local/lib/android && df -h
       - name: Checkout
-        if: |
-          github.event_name != 'workflow_dispatch' ||
-          github.event.inputs.platforms == 'all' ||
-          contains(github.event.inputs.platforms, matrix.target)
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.branch || github.ref_name }}
       - name: Install buildx
         if: |
           github.event_name != 'workflow_dispatch' ||
@@ -372,6 +362,17 @@ jobs:
           tags: ${{ steps.imagename.outputs.name }}:latest
           cache-to: type=registry,mode=max,ref=${{ steps.imagename.outputs.name }}:cache
           cache-from: type=registry,ref=${{ steps.imagename.outputs.name }}:cache
+          outputs: type=docker,dest=/tmp/${{ steps.imagename.outputs.rawname }}.tar
+      - name: Upload docker image artifact
+        if: |
+          github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.platforms == 'all' ||
+          contains(github.event.inputs.platforms, matrix.target)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.imagename.outputs.rawname }}-docker-image
+          path: /tmp/${{ steps.imagename.outputs.rawname }}.tar
+          retention-days: 7
       - name: Cleanup
         continue-on-error: true
         if: |
@@ -409,8 +410,6 @@ jobs:
           github.event.inputs.platforms == 'all' ||
           contains(github.event.inputs.platforms, matrix.target)
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.branch || github.ref_name }}
       - name: Login to Docker
         if: |
           github.event_name != 'workflow_dispatch' ||
@@ -458,8 +457,6 @@ jobs:
         run: df -h && sudo apt-get clean && docker system prune -a -f && sudo rm -rf /opt/ghc /usr/local/.ghcup /usr/local/lib/android && df -h
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.branch || github.ref_name }}
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
