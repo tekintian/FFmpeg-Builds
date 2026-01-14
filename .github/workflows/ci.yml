@@ -174,33 +174,46 @@ jobs:
           cd FFmpeg
           Write-Host "Current directory: $(Get-Location)"
           
-          $gplArgs = if("${{ github.event.inputs.license_type }}" -eq "gpl") { "--enable-gpl", "--enable-libx264", "--enable-libx265" } else { "--disable-gpl" }
+          # Get GPL arguments
+          $gplArgs = @()
+          if("${{ github.event.inputs.license_type }}" -eq "gpl") {
+            $gplArgs += "--enable-gpl", "--enable-libx264", "--enable-libx265"
+          } else {
+            $gplArgs += "--disable-gpl"
+          }
           
-          # Build basic configure command
-          $configCmd = @(
-            "./configure",
-            "--prefix=$HOME/ffmpeg-install",
+          # Build configure command with proper Windows path
+          $installPath = Join-Path $HOME "ffmpeg-install"
+          
+          # Build arguments array - don't include the command itself
+          $configArgs = @(
+            "--prefix=$installPath",
             "--toolchain=msvc",
             "--enable-version3",
             "--enable-libmp3lame",
             "--enable-libopus",
             "--enable-libvorbis",
             "--enable-libvpx",
-            "--extra-version=$(Get-Date -Format "yyyyMMdd")",
-            $gplArgs
+            "--extra-version=$(Get-Date -Format "yyyyMMdd")"
           )
           
-          Write-Host "Configure command: $($configCmd -join ' ')"
+          # Add GPL arguments
+          $configArgs += $gplArgs
+          
+          Write-Host "Configure command: ./configure $($configArgs -join ' ')"
           
           # Execute configure with error checking
           try {
-            & $configCmd 2>&1 | Tee-Object -FilePath configure_output.txt
+            # Use dot sourcing for configure script to ensure it runs properly
+            bash ./configure $configArgs 2>&1 | Tee-Object -FilePath configure_output.txt
             if ($LASTEXITCODE -ne 0) {
               Write-Host "Configure failed with exit code $LASTEXITCODE"
               exit 1
             }
           } catch {
             Write-Host "Configure threw an exception: $_"
+            Write-Host "Full exception details:"
+            Write-Host $_.Exception | Format-List -Force
             exit 1
           }
 
@@ -246,13 +259,13 @@ jobs:
           
           # Run make with error checking
           try {
-            & make -j$cores V=1
+            bash make -j$cores V=1
             if ($LASTEXITCODE -ne 0) {
               Write-Host "Make failed with exit code $LASTEXITCODE"
               exit 1
             }
             
-            & make install
+            bash make install
             if ($LASTEXITCODE -ne 0) {
               Write-Host "Make install failed with exit code $LASTEXITCODE"
               exit 1
@@ -262,13 +275,21 @@ jobs:
             exit 1
           }
 
-      - name: Create archive (Linux/macOS)
-        if: ${{ runner.os != 'Windows' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target)) }}
+      - name: Create archive (Linux)
+        if: ${{ runner.os == 'Linux' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target)) }}
         run: |
           # Create archive outside the source directory to avoid self-inclusion
           cd $HOME
           archive_name="ffmpeg-${{ matrix.target }}-$(date +%Y%m%d).tar.gz"
           tar czf "$archive_name" --warning=no-file-changed -C "ffmpeg-install" .
+
+      - name: Create archive (macOS)
+        if: ${{ runner.os == 'macOS' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target)) }}
+        run: |
+          # Create archive outside the source directory to avoid self-inclusion
+          cd $HOME
+          archive_name="ffmpeg-${{ matrix.target }}-$(date +%Y%m%d).tar.gz"
+          tar czf "$archive_name" -C "ffmpeg-install" .
 
       - name: Create archive (Windows)
         if: ${{ runner.os == 'Windows' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.target)) }}
