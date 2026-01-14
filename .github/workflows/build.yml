@@ -7,6 +7,14 @@ on:
       - 'LICENSE'
   workflow_dispatch:
     inputs:
+      branch:
+        description: 'Select branch to build'
+        type: choice
+        options:
+          - master
+          - dev
+        default: master
+        required: false
       doRelease:
         description: 'Publish new release'
         type: boolean
@@ -17,8 +25,24 @@ on:
         type: boolean
         default: false
         required: false
-  schedule:
-    - cron: '0 12 * * *'
+      platforms:
+        description: 'Select platforms to build (comma-separated, e.g., win64,linux64,macos64)'
+        type: choice
+        options:
+          - all
+          - win64,winarm64,linux64,linuxarm64,macos64,macosarm64
+          - win64,winarm64
+          - linux64,linuxarm64
+          - macos64,macosarm64
+          - win64
+          - winarm64
+          - linux64
+          - linuxarm64
+          - macos64
+          - macosarm64
+        default: 'win64,winarm64,linux64,linuxarm64,macos64,macosarm64'
+  # schedule:
+  #   - cron: '0 12 * * *'
 
 env:
   DOCKER_BUILDKIT: 1
@@ -29,6 +53,12 @@ jobs:
     if: ${{ github.event.inputs.buildOnly != 'true' }}
     runs-on: ubuntu-latest
     steps:
+      - name: Set Branch
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          BRANCH="${{ github.event.inputs.branch || 'master' }}"
+          echo "branch=$BRANCH" >> $GITHUB_ENV
+          echo "Building from branch: $BRANCH"
       - name: Repo Check
         if: ${{ github.event_name == 'schedule' }}
         run: |
@@ -59,6 +89,8 @@ jobs:
         run: df -h && sudo apt-get clean && docker system prune -a -f && sudo rm -rf /opt/ghc /usr/local/.ghcup /usr/local/lib/android && df -h
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch || github.ref_name }}
       - name: Install buildx
         uses: docker/setup-buildx-action@v3
         with:
@@ -133,17 +165,41 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [win32,win64,winarm64,linux32,linux64,linuxarm64]
+        target: [win32,win64,winarm64,linux32,linux64,linuxarm64,macos64,macosarm64]
     steps:
+      - name: Skip if not in platform list
+        if: |
+          github.event_name == 'workflow_dispatch' &&
+          github.event.inputs.platforms != 'all' && !contains(github.event.inputs.platforms, matrix.target)
+        run: |
+          echo "Skipping ${{ matrix.target }}"
       - name: Free Disk-Space
+        if: |
+          github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.platforms == 'all' ||
+          contains(github.event.inputs.platforms, matrix.target)
         run: df -h && sudo apt-get clean && docker system prune -a -f && sudo rm -rf /opt/ghc /usr/local/.ghcup /usr/local/lib/android && df -h
       - name: Checkout
+        if: |
+          github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.platforms == 'all' ||
+          contains(github.event.inputs.platforms, matrix.target)
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch || github.ref_name }}
       - name: Install buildx
+        if: |
+          github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.platforms == 'all' ||
+          contains(github.event.inputs.platforms, matrix.target)
         uses: docker/setup-buildx-action@v3
         with:
           buildkitd-config: .github/buildkit.toml
       - name: Login to Docker
+        if: |
+          github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.platforms == 'all' ||
+          contains(github.event.inputs.platforms, matrix.target)
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -151,6 +207,10 @@ jobs:
           password: ${{ github.token }}
       - name: Image Name
         id: imagename
+        if: |
+          github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.platforms == 'all' ||
+          contains(github.event.inputs.platforms, matrix.target)
         run: |
           IMG="${GITHUB_REPOSITORY,,}/base-${{ matrix.target }}"
           IMG="${IMG/ /-}"
@@ -158,8 +218,16 @@ jobs:
           echo "rawname=${IMG#*/}" >> $GITHUB_OUTPUT
           echo "gh_repo=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
       - name: Stop Commands
+        if: |
+          github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.platforms == 'all' ||
+          contains(github.event.inputs.platforms, matrix.target)
         run: T="$(echo -n ${{ github.token }} | sha256sum | head -c 64)" && echo -e "::add-mask::${T}\n::stop-commands::${T}"
       - name: Build target base image
+        if: |
+          github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.platforms == 'all' ||
+          contains(github.event.inputs.platforms, matrix.target)
         uses: docker/build-push-action@v6
         with:
           context: images/base-${{ matrix.target }}
@@ -173,6 +241,10 @@ jobs:
             GH_REPO=ghcr.io/${{ steps.imagename.outputs.gh_repo }}
       - name: Cleanup
         continue-on-error: true
+        if: |
+          github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.platforms == 'all' ||
+          contains(github.event.inputs.platforms, matrix.target)
         uses: BtbN/delete-untagged-ghcr-action@main
         with:
           token: ${{ github.token }}
@@ -189,7 +261,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [win64,winarm64,linux64,linuxarm64]
+        target: [win64,winarm64,linux64,linuxarm64,macos64,macosarm64]
         variant: [gpl,lgpl,gpl 8.0,gpl 7.1,lgpl 8.0,lgpl 7.1,gpl-shared,lgpl-shared,gpl-shared 8.0,gpl-shared 7.1,lgpl-shared 8.0,lgpl-shared 7.1]
         include:
           - target: win64
@@ -208,14 +280,32 @@ jobs:
             variant: gpl 4.3
     steps:
       - name: Free Disk-Space
+        if: |
+          github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.platforms == 'all' ||
+          contains(github.event.inputs.platforms, matrix.target)
         run: df -h && sudo apt-get clean && docker system prune -a -f && sudo rm -rf /opt/ghc /usr/local/.ghcup /usr/local/lib/android && df -h
       - name: Checkout
+        if: |
+          github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.platforms == 'all' ||
+          contains(github.event.inputs.platforms, matrix.target)
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch || github.ref_name }}
       - name: Install buildx
+        if: |
+          github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.platforms == 'all' ||
+          contains(github.event.inputs.platforms, matrix.target)
         uses: docker/setup-buildx-action@v3
         with:
           buildkitd-config: .github/buildkit.toml
       - name: Login to Docker
+        if: |
+          github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.platforms == 'all' ||
+          contains(github.event.inputs.platforms, matrix.target)
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -223,6 +313,10 @@ jobs:
           password: ${{ github.token }}
       - name: Image Name
         id: imagename
+        if: |
+          github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.platforms == 'all' ||
+          contains(github.event.inputs.platforms, matrix.target)
         run: |
           IMG="${GITHUB_REPOSITORY,,}/${{ matrix.target }}-${{ matrix.variant }}"
           IMG="${IMG/ /-}"
@@ -230,19 +324,39 @@ jobs:
           echo "rawname=${IMG#*/}" >> $GITHUB_OUTPUT
       - name: Get download cache key
         id: dl_cache
+        if: |
+          github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.platforms == 'all' ||
+          contains(github.event.inputs.platforms, matrix.target)
         run: |
           echo "dltagname=$(./util/get_dl_cache_tag.sh)" >> $GITHUB_OUTPUT
       - name: Stop Commands
+        if: |
+          github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.platforms == 'all' ||
+          contains(github.event.inputs.platforms, matrix.target)
         run: T="$(echo -n ${{ github.token }} | sha256sum | head -c 64)" && echo -e "::add-mask::${T}\n::stop-commands::${T}"
       - name: Generate Dockerfile
+        if: |
+          github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.platforms == 'all' ||
+          contains(github.event.inputs.platforms, matrix.target)
         run: ./generate.sh ${{ matrix.target }} ${{ matrix.variant }}
       - name: Cache
+        if: |
+          github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.platforms == 'all' ||
+          contains(github.event.inputs.platforms, matrix.target)
         uses: actions/cache/restore@v4
         with:
           path: .cache/downloads
           key: download-cache-${{ steps.dl_cache.outputs.dltagname }}
           fail-on-cache-miss: true
       - name: Build target base image
+        if: |
+          github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.platforms == 'all' ||
+          contains(github.event.inputs.platforms, matrix.target)
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -254,6 +368,10 @@ jobs:
           cache-from: type=registry,ref=${{ steps.imagename.outputs.name }}:cache
       - name: Cleanup
         continue-on-error: true
+        if: |
+          github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.platforms == 'all' ||
+          contains(github.event.inputs.platforms, matrix.target)
         uses: BtbN/delete-untagged-ghcr-action@main
         with:
           token: ${{ github.token }}
@@ -270,29 +388,55 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [win64,winarm64,linux64,linuxarm64]
+        target: [win64,winarm64,linux64,linuxarm64,macos64,macosarm64]
         variant: [gpl,lgpl,gpl 8.0,gpl 7.1,lgpl 8.0,lgpl 7.1,gpl-shared,lgpl-shared,gpl-shared 8.0,gpl-shared 7.1,lgpl-shared 8.0,lgpl-shared 7.1]
     steps:
       - name: Free Disk-Space
+        if: |
+          github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.platforms == 'all' ||
+          contains(github.event.inputs.platforms, matrix.target)
         run: df -h && sudo apt-get clean && docker system prune -a -f && sudo rm -rf /opt/ghc /usr/local/.ghcup /usr/local/lib/android && df -h
       - name: Checkout
+        if: |
+          github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.platforms == 'all' ||
+          contains(github.event.inputs.platforms, matrix.target)
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch || github.ref_name }}
       - name: Login to Docker
+        if: |
+          github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.platforms == 'all' ||
+          contains(github.event.inputs.platforms, matrix.target)
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
       - name: Build ffmpeg
+        if: |
+          github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.platforms == 'all' ||
+          contains(github.event.inputs.platforms, matrix.target)
         run: |
           T="$(echo -n ${{ github.token }} | sha256sum | head -c 64)" && echo -e "::add-mask::${T}\n::stop-commands::${T}"
           ./build.sh ${{ matrix.target }} ${{ matrix.variant }}
       - name: Replace spaces in string
         id: strs
+        if: |
+          github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.platforms == 'all' ||
+          contains(github.event.inputs.platforms, matrix.target)
         run: |
           SLUG="${{ matrix.target }}-${{ matrix.variant }}"
           echo "artifact_slug=${SLUG// /-}" >> $GITHUB_OUTPUT
       - name: Upload artifacts
+        if: |
+          github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.platforms == 'all' ||
+          contains(github.event.inputs.platforms, matrix.target)
         uses: actions/upload-artifact@v4
         with:
           name: ffmpeg-${{ steps.strs.outputs.artifact_slug }}
@@ -308,6 +452,8 @@ jobs:
         run: df -h && sudo apt-get clean && docker system prune -a -f && sudo rm -rf /opt/ghc /usr/local/.ghcup /usr/local/lib/android && df -h
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch || github.ref_name }}
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
